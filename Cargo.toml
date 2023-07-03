@@ -1,0 +1,10 @@
+[package]
+name = "megadep"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+rustc_errors = { path = "/home/michael/gitfork/rust/compiler/rustc_errors" }
+rustc_interface = { path = "/home/michael/gitfork/rust/compiler/rustc_interface" }
+rustc_session = { path = "/home/michael/gitfork/rust/compiler/rustc_session" }
