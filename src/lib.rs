@@ -16,11 +16,12 @@ use std::{
 
 use rustc_errors::registry;
 use rustc_session::config::{self, CheckCfg};
+use rustc_session::search_paths::SearchPath;
 
 // use rustc_hash::{FxHashMap, FxHashSet};
 // use rustc_span::source_map;
 
-pub fn process(path: PathBuf) {
+pub fn process(path: PathBuf, crate_deps: Vec<PathBuf>) {
     holochain_trace::test_run().ok();
     let out = process::Command::new("rustc")
         .arg("--print=sysroot")
@@ -30,11 +31,20 @@ pub fn process(path: PathBuf) {
     let sysroot = str::from_utf8(&out.stdout).unwrap().trim();
     // let mut externs = BTreeMap::new();
     // externs.insert("beta".to_string(), ExternEntry)
-    // let sysroot = "/home/michael/gitfork/rust/build/x86_64-unknown-linux-gnu/stage2";
+
+    let search_paths: Vec<_> = crate_deps
+        .into_iter()
+        .map(|p| {
+            let p = format!("crate={}", p.display());
+            SearchPath::from_cli_opt(&p, Default::default())
+        })
+        .collect();
+
     let config = rustc_interface::Config {
         // Command line options
         opts: config::Options {
             maybe_sysroot: Some(path::PathBuf::from(sysroot)),
+            search_paths,
             // externs: rustc_session::config::Externs::new(externs)
             ..config::Options::default()
         },
