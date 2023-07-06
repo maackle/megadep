@@ -10,7 +10,9 @@ members = [
 ]
 
 [dependencies]
+getopts = "0.2"
 holochain_trace = "*"
+
 # rustc_errors = { path = "/home/michael/gitfork/rust/compiler/rustc_errors" }
 # rustc_error_codes = { path = "/home/michael/gitfork/rust/compiler/rustc_error_codes" }
 # rustc_hir = { path = "/home/michael/gitfork/rust/compiler/rustc_hir" }

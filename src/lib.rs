@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 
 extern crate rustc_driver;
+extern crate rustc_driver_impl;
 extern crate rustc_error_codes;
 extern crate rustc_errors;
 extern crate rustc_hash;
@@ -9,14 +10,14 @@ extern crate rustc_interface;
 extern crate rustc_session;
 extern crate rustc_span;
 
-use std::{
-    path::{self, PathBuf},
-    process, str,
-};
+mod config;
 
-use rustc_errors::registry;
-use rustc_session::config::{self, CheckCfg};
+use std::{collections::BTreeMap, path::PathBuf, process, str};
+
+use rustc_session::config::{default_lib_output, CrateType, ExternEntry, ExternLocation, Options};
 use rustc_session::search_paths::SearchPath;
+use rustc_session::EarlyErrorHandler;
+use rustc_span::edition::Edition;
 
 // use rustc_hash::{FxHashMap, FxHashSet};
 // use rustc_span::source_map;
@@ -28,63 +29,55 @@ pub fn process(path: PathBuf, crate_deps: Vec<PathBuf>) {
         .current_dir(".")
         .output()
         .unwrap();
-    let sysroot = str::from_utf8(&out.stdout).unwrap().trim();
-    // let mut externs = BTreeMap::new();
-    // externs.insert("beta".to_string(), ExternEntry)
+    // let sysroot = str::from_utf8(&out.stdout).unwrap().trim();
+    let mut externs = BTreeMap::new();
+    let location = ExternLocation::FoundInLibrarySearchDirectories;
+    externs.insert(
+        "alpha".to_string(),
+        ExternEntry {
+            location: ExternLocation::FoundInLibrarySearchDirectories,
+            is_private_dep: false,
+            add_prelude: false,
+            nounused_dep: false,
+            force: false,
+        },
+    );
+    // externs.insert(
+    //     "beta".to_string(),
+    //     ExternEntry {
+    //         location,
+    //         is_private_dep: false,
+    //         add_prelude: false,
+    //         nounused_dep: false,
+    //         force: false,
+    //     },
+    // );
 
     let search_paths: Vec<_> = crate_deps
         .into_iter()
         .map(|p| {
-            let p = format!("crate={}", p.display());
-            SearchPath::from_cli_opt(&p, Default::default())
+            let p = format!("{}", p.display());
+            SearchPath::from_cli_opt(&EarlyErrorHandler::new(Default::default()), &p)
         })
         .collect();
 
-    let config = rustc_interface::Config {
-        // Command line options
-        opts: config::Options {
-            maybe_sysroot: Some(path::PathBuf::from(sysroot)),
-            search_paths,
-            // externs: rustc_session::config::Externs::new(externs)
-            ..config::Options::default()
-        },
-        // cfg! configuration in addition to the default ones
-        crate_cfg: Default::default(), // FxHashSet<(String, Option<String>)>
-        crate_check_cfg: CheckCfg::default(), // CheckCfg
-        input: config::Input::File(path),
-        // input: config::Input::Str {
-        //     name: source_map::FileName::Custom("main.rs".into()),
-        //     input: r#"
-        // static HELLO: &str = "Hello, world!";
-        // fn main() {
-        //     println!("{HELLO}");
-        // }
-        // "#
-        //     .into(),
-        // },
-        output_dir: None,                     // Option<PathBuf>
-        output_file: None,                    // Option<PathBuf>
-        file_loader: None,                    // Option<Box<dyn FileLoader + Send + Sync>>
-        locale_resources: Default::default(), // rustc_driver::DEFAULT_LOCALE_RESOURCES,
-        lint_caps: Default::default(),        // FxHashMap<lint::LintId, lint::Level>
-        // lint_caps: FxHashMap::default(), // FxHashMap<lint::LintId, lint::Level>
-        // This is a callback from the driver that is called when [`ParseSess`] is created.
-        parse_sess_created: None, //Option<Box<dyn FnOnce(&mut ParseSess) + Send>>
-        // This is a callback from the driver that is called when we're registering lints;
-        // it is called during plugin registration when we have the LintStore in a non-shared state.
-        //
-        // Note that if you find a Some here you probably want to call that function in the new
-        // function being registered.
-        register_lints: None, // Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>>
-        // This is a callback from the driver that is called just after we have populated
-        // the list of queries.
-        //
-        // The second parameter is local providers and the third parameter is external providers.
-        override_queries: None, // Option<fn(&Session, &mut ty::query::Providers<'_>, &mut ty::query::Providers<'_>)>
-        // Registry of diagnostics codes.
-        registry: registry::Registry::new(&rustc_error_codes::DIAGNOSTICS),
-        make_codegen_backend: None,
+    dbg!(&search_paths[0].files.len());
+    dbg!(&externs);
+
+    let opts0 = Options {
+        // maybe_sysroot: Some(path::PathBuf::from(sysroot)),
+        search_paths,
+        externs: rustc_session::config::Externs::new(externs),
+        edition: Edition::Edition2021,
+        crate_types: vec![default_lib_output()],
+        ..Options::default()
     };
+
+    let opts =
+        config::parse_opts("--edition 2021 --crate-type lib -L target/debug/deps --extern alpha");
+
+    let config = config::config(path, opts);
+
     rustc_interface::run_compiler(config, |compiler| {
         compiler.enter(|queries| {
             // Parse the program and print the syntax tree.
@@ -93,11 +86,11 @@ pub fn process(path: PathBuf, crate_deps: Vec<PathBuf>) {
 
             // Analyze the program and inspect the types of definitions.
             queries.global_ctxt().unwrap().enter(|tcx| {
-                for id in tcx.hir().items() {
+                let hir = tcx.hir();
+                for id in hir.items() {
                     // dbg!(&id);
-                    let hir = tcx.hir();
                     let item = hir.item(id);
-                    // dbg!(&item);
+                    dbg!(&item);
                     match item.kind {
                         rustc_hir::ItemKind::Static(_, _, _) | rustc_hir::ItemKind::Fn(_, _, _) => {
                             let name = item.ident;
