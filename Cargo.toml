@@ -3,19 +3,12 @@ name = "megadep"
 version = "0.1.0"
 edition = "2021"
 
-[workspace]
-members = [
-    "crates/alpha",
-    "crates/beta",
-]
+# note that for VS code, the following settings are useful too:
+#     "rust-analyzer.cargo.sysroot": "discover",
+#     "rust-analyzer.rustc.source": "discover",
+[package.metadata.rust-analyzer] 
+rustc_private=true 
 
 [dependencies]
 getopts = "0.2"
 holochain_trace = "*"
-
-# rustc_errors = { path = "/home/michael/gitfork/rust/compiler/rustc_errors" }
-# rustc_error_codes = { path = "/home/michael/gitfork/rust/compiler/rustc_error_codes" }
-# rustc_hir = { path = "/home/michael/gitfork/rust/compiler/rustc_hir" }
-# rustc_interface = { path = "/home/michael/gitfork/rust/compiler/rustc_interface" }
-# rustc_session = { path = "/home/michael/gitfork/rust/compiler/rustc_session" }
-# rustc_span = { path = "/home/michael/gitfork/rust/compiler/rustc_span" }

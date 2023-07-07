@@ -4,7 +4,6 @@ extern crate rustc_driver;
 extern crate rustc_driver_impl;
 extern crate rustc_error_codes;
 extern crate rustc_errors;
-extern crate rustc_hash;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_session;
@@ -12,27 +11,23 @@ extern crate rustc_span;
 
 mod config;
 
-use std::{collections::BTreeMap, path::PathBuf, process, str};
+use std::path::PathBuf;
 
-use rustc_session::config::{default_lib_output, CrateType, ExternEntry, ExternLocation, Options};
-use rustc_session::search_paths::SearchPath;
-use rustc_session::EarlyErrorHandler;
-use rustc_span::edition::Edition;
-
-// use rustc_hash::{FxHashMap, FxHashSet};
-// use rustc_span::source_map;
+use rustc_hir::ItemKind;
 
 pub struct Megadep {
     pub deps_dir: String,
 }
 
 impl Megadep {
-    pub fn process(&self, path: PathBuf) {
+    pub fn process(&self, crate_name: &str, path: PathBuf) {
         holochain_trace::test_run().ok();
 
+        let deps_dir = &self.deps_dir;
+
         let opts = config::parse_opts(&format!(
-            "--edition 2021 --crate-type lib -L {} --extern alpha",
-            self.deps_dir
+            "--crate-name {crate_name} --edition 2021 --crate-type lib -L {deps_dir} --extern alpha",
+            // "--edition 2021 --crate-type lib -L {deps_dir} --extern alpha --sysroot {sysroot}",
         ));
 
         let config = config::config(path, opts);
@@ -46,16 +41,77 @@ impl Megadep {
                 // Analyze the program and inspect the types of definitions.
                 queries.global_ctxt().unwrap().enter(|tcx| {
                     let hir = tcx.hir();
+
+                    let money = |def_id| -> String {
+                        // tcx.def_path_debug_str(def_id)
+                        tcx.def_path_str(def_id)
+                    };
+
                     for id in hir.items() {
                         // dbg!(&id);
+                        let hir_id = id.hir_id();
                         let item = hir.item(id);
-                        dbg!(&item.kind, &item.ident);
+                        let node = hir.get(hir_id);
+
+                        let name = item.ident;
                         match item.kind {
-                            rustc_hir::ItemKind::Static(_, _, _)
-                            | rustc_hir::ItemKind::Fn(_, _, _) => {
-                                let name = item.ident;
-                                let ty = tcx.type_of(item.hir_id().owner.def_id);
-                                println!("{name:?}:\t{ty:?}")
+                            ItemKind::Static(_, _, _)
+                            | ItemKind::Trait(_, _, _, _, _)
+                            | ItemKind::TraitAlias(_, _)
+                            | ItemKind::TyAlias(_, _)
+                            | ItemKind::Fn(_, _, _)
+                            | ItemKind::Struct(_, _)
+                            | ItemKind::Enum(_, _) => {
+                                println!("NODE> {} {:?}, {:#?}", name, node.ident(), node);
+                            }
+                            _ => (),
+                        }
+                        // dbg!(&item.kind, &item.ident);
+                        match item.kind {
+                            ItemKind::Static(_, _, _)
+                            | ItemKind::Trait(_, _, _, _, _)
+                            | ItemKind::TraitAlias(_, _)
+                            | ItemKind::TyAlias(_, _)
+                            | ItemKind::Enum(_, _) => {
+                                // | ItemKind::Fn(_, _, _){
+                                let m = money(item.owner_id.to_def_id());
+
+                                let ty1 = tcx.type_of(item.owner_id.def_id).subst_identity();
+                                let ty2 = tcx.type_of(item.hir_id().owner.def_id).subst_identity();
+                                println!("{m:#?}  {name:?}   {ty1:?}   {ty2:?}")
+                            }
+
+                            ItemKind::Struct(v, _) => match v {
+                                rustc_hir::VariantData::Struct(_, _) => todo!(),
+                                rustc_hir::VariantData::Tuple(fs, hid, lid) => {
+                                    let fs: Vec<_> = fs
+                                        .into_iter()
+                                        .map(|f| money(f.def_id.to_def_id()))
+                                        .collect();
+                                    println!("Struct/Tuple     {name}({fs:?})");
+                                }
+                                rustc_hir::VariantData::Unit(hid, lid) => {
+                                    println!("Struct/Unit      {name}:   {hid:?}");
+                                }
+                            },
+                            ItemKind::Fn(sig, _, body) => {
+                                let ins = sig
+                                    .decl
+                                    .inputs
+                                    .iter()
+                                    .map(|t| money(t.hir_id.owner.to_def_id()))
+                                    .collect::<Vec<_>>();
+                                let out = match sig.decl.output {
+                                    rustc_hir::FnRetTy::DefaultReturn(_) => continue,
+                                    rustc_hir::FnRetTy::Return(r) => {
+                                        money(r.hir_id.owner.to_def_id())
+                                    }
+                                };
+
+                                let ty = tcx.type_of(item.hir_id().owner.def_id).subst_identity();
+                                let bod = tcx.type_of(body.hir_id.owner.def_id).skip_binder();
+                                println!("{name:?}:\t{ty:?}\t{bod:?}");
+                                println!("{name:?}:      {ins:?}      ->      {out:?}");
                             }
                             _ => (),
                         }
@@ -65,6 +121,16 @@ impl Megadep {
         });
     }
 }
+
+macro_rules! expect_v {
+    ($e:expr, $p:path) => {
+        match $e {
+            $p(value) => value,
+            _ => panic!("expected {}", stringify!($p)),
+        }
+    };
+}
+
 /*
 
    let out = process::Command::new("rustc")
