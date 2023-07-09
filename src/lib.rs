@@ -11,12 +11,14 @@ extern crate rustc_session;
 extern crate rustc_span;
 
 mod config;
+pub(crate) mod nstring;
 
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
 
+use nstring::NString;
 use rustc_hir::{def_id::DefId, intravisit, HirId};
 use rustc_middle::ty::TyCtxt;
 
@@ -24,10 +26,10 @@ pub struct Megadep {
     pub deps_dir: String,
 }
 
-pub type DefGraphMap<T = DefId> = HashMap<T, HashSet<T>>;
+pub type DefGraphMap<T = NString> = HashMap<T, HashSet<T>>;
 
 #[derive(Default, Debug)]
-pub struct DefGraph<T = DefId>(DefGraphMap<T>);
+pub struct DefGraph<T = NString>(DefGraphMap<T>);
 
 impl<T: Eq + PartialEq + std::hash::Hash> DefGraph<T> {
     pub fn extend(mut self, other: Self) -> Self {
@@ -40,7 +42,7 @@ impl<T: Eq + PartialEq + std::hash::Hash> DefGraph<T> {
 
 struct Vis<'v> {
     cx: TyCtxt<'v>,
-    graph: DefGraphMap<String>,
+    graph: DefGraphMap,
     paths: Vec<DefId>,
     // paths: Vec<rustc_hir::Path<'v>>,
 }
@@ -50,65 +52,41 @@ impl<'v> Vis<'v> {
         self.cx.hir().get(id)
     }
 
-    fn repr(&self, did: DefId) -> String {
-        self.cx.def_path_debug_str(did)
+    fn repr(&self, did: DefId) -> NString {
+        NString::new(self.cx.def_path_debug_str(did))
     }
 }
 
 impl<'v> intravisit::Visitor<'v> for Vis<'v> {
-    // fn visit_name(&mut self, name: rustc_span::Symbol) {
-    //     // dbg!(name);
-    // }
-
-    // fn visit_id(&mut self, id: HirId) {
-    //     let node = self.node(id);
-    //     // dbg!(&node);
-
-    //     let owner = id.owner.to_def_id();
-    //     let parent = self.cx.parent(owner);
-    //     // let parent = self.cx.hir().parent_id(id);
-    //     // self.cx.item_name(id);
-    //     if parent != owner {}
-    // }
-
     fn visit_path(&mut self, path: &rustc_hir::Path<'v>, id: HirId) {
-        dbg!(path.res);
+        // if let Some(did) = path.res.opt_def_id() {
+        //     dbg!(self.repr(did));
+        // }
         let hir = self.cx.hir();
         match path.res {
             rustc_hir::def::Res::Def(_, did) => {
-                // dbg!(&path.res);
-                dbg!(self.cx.def_path_debug_str(path.res.def_id()));
                 self.paths.push(did);
                 let didstr = self.repr(did);
                 if let Some((parent_id, _)) = hir.parent_owner_iter(id).next() {
-                    let m = self.graph.entry(self.repr(parent_id.to_def_id())).or_default();
+                    let m = self
+                        .graph
+                        .entry(self.repr(parent_id.to_def_id()))
+                        .or_default();
                     m.insert(didstr);
                 } else {
                     dbg!("no parent");
                 }
             }
-            _ => ()
-            // rustc_hir::def::Res::PrimTy(_) => todo!(),
-            // rustc_hir::def::Res::SelfTyParam { trait_ } => todo!(),
-            // rustc_hir::def::Res::SelfTyAlias { alias_to, forbid_generic, is_trait_impl } => todo!(),
-            // rustc_hir::def::Res::SelfCtor(_) => todo!(),
-            // rustc_hir::def::Res::Local(_) => todo!(),
-            // rustc_hir::def::Res::ToolMod => todo!(),
-            // rustc_hir::def::Res::NonMacroAttr(_) => todo!(),
-            // rustc_hir::def::Res::Err => todo!(),
+            _ => (),
         }
         intravisit::walk_path(self, path)
     }
-    // fn visit_item(&mut self, i: &'v rustc_hir::Item<'v>) {
-    //     dbg!(i);
-    //     intravisit::walk_item(self, i)
-    // }
 }
 
 // type ProcessArgs<'a> = Vec<(&'a str, Vec<PathBuf>)>;
 
 impl Megadep {
-    pub fn process(&self, crate_name: &str, path: PathBuf) -> DefGraph<String> {
+    pub fn process(&self, crate_name: &str, path: PathBuf) -> DefGraph {
         holochain_trace::test_run().ok();
 
         let deps_dir = &self.deps_dir;

@@ -12,3 +12,4 @@ rustc_private=true
 [dependencies]
 getopts = "0.2"
 holochain_trace = "*"
+regex = "*"
