@@ -12,34 +12,103 @@ extern crate rustc_span;
 
 mod config;
 
-use std::path::PathBuf;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
-use rustc_hir::{intravisit, HirId, ItemKind};
+use rustc_hir::{def_id::DefId, intravisit, HirId};
 use rustc_middle::ty::TyCtxt;
 
 pub struct Megadep {
     pub deps_dir: String,
 }
 
-struct Vis;
+pub type DefGraphMap<T = DefId> = HashMap<T, HashSet<T>>;
 
-impl<'v> intravisit::Visitor<'v> for Vis {
-    fn visit_name(&mut self, name: rustc_span::Symbol) {
-        dbg!(name);
+#[derive(Default, Debug)]
+pub struct DefGraph<T = DefId>(DefGraphMap<T>);
+
+impl<T: Eq + PartialEq + std::hash::Hash> DefGraph<T> {
+    pub fn extend(mut self, other: Self) -> Self {
+        for (k, v) in other.0 {
+            self.0.entry(k).or_default().extend(v);
+        }
+        self
+    }
+}
+
+struct Vis<'v> {
+    cx: TyCtxt<'v>,
+    graph: DefGraphMap<String>,
+    paths: Vec<DefId>,
+    // paths: Vec<rustc_hir::Path<'v>>,
+}
+
+impl<'v> Vis<'v> {
+    fn node(&self, id: HirId) -> rustc_hir::Node {
+        self.cx.hir().get(id)
     }
 
-    fn visit_id(&mut self, hir_id: HirId) {
-        dbg!(hir_id);
+    fn repr(&self, did: DefId) -> String {
+        self.cx.def_path_debug_str(did)
     }
+}
 
+impl<'v> intravisit::Visitor<'v> for Vis<'v> {
+    // fn visit_name(&mut self, name: rustc_span::Symbol) {
+    //     // dbg!(name);
+    // }
+
+    // fn visit_id(&mut self, id: HirId) {
+    //     let node = self.node(id);
+    //     // dbg!(&node);
+
+    //     let owner = id.owner.to_def_id();
+    //     let parent = self.cx.parent(owner);
+    //     // let parent = self.cx.hir().parent_id(id);
+    //     // self.cx.item_name(id);
+    //     if parent != owner {}
+    // }
+
+    fn visit_path(&mut self, path: &rustc_hir::Path<'v>, id: HirId) {
+        dbg!(path.res);
+        let hir = self.cx.hir();
+        match path.res {
+            rustc_hir::def::Res::Def(_, did) => {
+                // dbg!(&path.res);
+                dbg!(self.cx.def_path_debug_str(path.res.def_id()));
+                self.paths.push(did);
+                let didstr = self.repr(did);
+                if let Some((parent_id, _)) = hir.parent_owner_iter(id).next() {
+                    let m = self.graph.entry(self.repr(parent_id.to_def_id())).or_default();
+                    m.insert(didstr);
+                } else {
+                    dbg!("no parent");
+                }
+            }
+            _ => ()
+            // rustc_hir::def::Res::PrimTy(_) => todo!(),
+            // rustc_hir::def::Res::SelfTyParam { trait_ } => todo!(),
+            // rustc_hir::def::Res::SelfTyAlias { alias_to, forbid_generic, is_trait_impl } => todo!(),
+            // rustc_hir::def::Res::SelfCtor(_) => todo!(),
+            // rustc_hir::def::Res::Local(_) => todo!(),
+            // rustc_hir::def::Res::ToolMod => todo!(),
+            // rustc_hir::def::Res::NonMacroAttr(_) => todo!(),
+            // rustc_hir::def::Res::Err => todo!(),
+        }
+        intravisit::walk_path(self, path)
+    }
     // fn visit_item(&mut self, i: &'v rustc_hir::Item<'v>) {
     //     dbg!(i);
     //     intravisit::walk_item(self, i)
     // }
 }
 
+// type ProcessArgs<'a> = Vec<(&'a str, Vec<PathBuf>)>;
+
 impl Megadep {
-    pub fn process(&self, crate_name: &str, path: PathBuf) {
+    pub fn process(&self, crate_name: &str, path: PathBuf) -> DefGraph<String> {
         holochain_trace::test_run().ok();
 
         let deps_dir = &self.deps_dir;
@@ -51,6 +120,8 @@ impl Megadep {
 
         let config = config::config(path, opts);
 
+        let mut graph = HashMap::new();
+
         rustc_interface::run_compiler(config, |compiler| {
             compiler.enter(|queries| {
                 // Parse the program and print the syntax tree.
@@ -59,97 +130,23 @@ impl Megadep {
 
                 // Analyze the program and inspect the types of definitions.
                 queries.global_ctxt().unwrap().enter(|tcx| {
+                    // let r = tcx.typeck(todo!());
                     let hir = tcx.hir();
+                    // dbg!(tcx.hir_crate_items(()));
 
-                    // tcx.hir_crate_items(())
-
-                    // hir.vis
-                    hir.visit_all_item_likes_in_crate(&mut Vis);
-
-                    return;
-                    // let money = |def_id| -> String {
-                    //     // tcx.def_path_debug_str(def_id)
-                    //     tcx.def_path_str(def_id)
-                    // };
-
-                    for id in hir.items() {
-                        // dbg!(&id);
-                        let hir_id = id.hir_id();
-                        let item = hir.item(id);
-                        let node = hir.get(hir_id);
-
-                        let name = item.ident;
-
-                        match item.kind {
-                            ItemKind::Mod(_) => {
-                                // dbg!(tcx.module_children_local(item.hir_id().owner.def_id));
-                            }
-
-                            ItemKind::Static(_, _, _)
-                            | ItemKind::Trait(_, _, _, _, _)
-                            | ItemKind::TraitAlias(_, _)
-                            | ItemKind::TyAlias(_, _)
-                            | ItemKind::Fn(_, _, _)
-                            | ItemKind::Struct(_, _)
-                            | ItemKind::Enum(_, _) => {
-                                // println!("NODE> {} {:?}, {:#?}", name, node.ident(), node);
-                                // dbg!(tcx.module_children_local(item.hir_id()));
-                            }
-                            _ => (),
-                        }
-                        // // dbg!(&item.kind, &item.ident);
-                        // match item.kind {
-                        //     ItemKind::Static(_, _, _)
-                        //     | ItemKind::Trait(_, _, _, _, _)
-                        //     | ItemKind::TraitAlias(_, _)
-                        //     | ItemKind::TyAlias(_, _)
-                        //     | ItemKind::Enum(_, _) => {
-                        //         // | ItemKind::Fn(_, _, _){
-                        //         let m = money(item.owner_id.to_def_id());
-
-                        //         let ty1 = tcx.type_of(item.owner_id.def_id).subst_identity();
-                        //         let ty2 = tcx.type_of(item.hir_id().owner.def_id).subst_identity();
-                        //         println!("{m:#?}  {name:?}   {ty1:?}   {ty2:?}")
-                        //     }
-
-                        //     ItemKind::Struct(v, _) => match v {
-                        //         rustc_hir::VariantData::Struct(_, _) => todo!(),
-                        //         rustc_hir::VariantData::Tuple(fs, hid, lid) => {
-                        //             let fs: Vec<_> = fs
-                        //                 .into_iter()
-                        //                 .map(|f| money(f.def_id.to_def_id()))
-                        //                 .collect();
-                        //             println!("Struct/Tuple     {name}({fs:?})");
-                        //         }
-                        //         rustc_hir::VariantData::Unit(hid, lid) => {
-                        //             println!("Struct/Unit      {name}:   {hid:?}");
-                        //         }
-                        //     },
-                        //     ItemKind::Fn(sig, _, body) => {
-                        //         let ins = sig
-                        //             .decl
-                        //             .inputs
-                        //             .iter()
-                        //             .map(|t| money(t.hir_id.owner.to_def_id()))
-                        //             .collect::<Vec<_>>();
-                        //         let out = match sig.decl.output {
-                        //             rustc_hir::FnRetTy::DefaultReturn(_) => continue,
-                        //             rustc_hir::FnRetTy::Return(r) => {
-                        //                 money(r.hir_id.owner.to_def_id())
-                        //             }
-                        //         };
-
-                        //         let ty = tcx.type_of(item.hir_id().owner.def_id).subst_identity();
-                        //         let bod = tcx.type_of(body.hir_id.owner.def_id).skip_binder();
-                        //         println!("{name:?}:\t{ty:?}\t{bod:?}");
-                        //         println!("{name:?}:      {ins:?}      ->      {out:?}");
-                        //     }
-                        //     _ => (),
-                        // }
-                    }
+                    let mut v = Vis {
+                        cx: tcx,
+                        graph: Default::default(),
+                        paths: Default::default(),
+                    };
+                    hir.visit_all_item_likes_in_crate(&mut v);
+                    dbg!(&v.paths, &v.graph);
+                    graph = v.graph;
                 })
-            });
+            })
         });
+
+        return DefGraph(graph);
     }
 }
 
